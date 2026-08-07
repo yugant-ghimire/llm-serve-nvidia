@@ -3,8 +3,8 @@ services:
     build:
       context: .
       args:
-        VLLM_VERSION: ${VLLM_VERSION:-v0.19.1}
-    image: llm-serve-nvidia:${VLLM_VERSION:-v0.19.1}
+        VLLM_VERSION: ${VLLM_VERSION:-v0.19.1-ubuntu2404}
+    image: llm-serve-nvidia:${VLLM_VERSION:-v0.19.1-ubuntu2404}
     container_name: vllm-server
     env_file:
       - config.env

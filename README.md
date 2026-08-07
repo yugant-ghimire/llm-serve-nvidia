@@ -92,6 +92,8 @@ Optional extra speed: enable multi-token prediction (speculative decoding) by un
 
 | Symptom | Fix |
 |---|---|
+| `could not select device driver "nvidia" with capabilities: [[gpu]]` | NVIDIA Container Toolkit missing on the host — install it, run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`, verify with the `nvidia-smi` passthrough check in section 1 |
+| `GLIBC_2.38 not found (required by ...libhaishare.so)` spam | The cloud host injects a GPU-sharing shim needing a newer glibc than Ubuntu 22.04 images have — use an `-ubuntu2404` `VLLM_VERSION` tag (already the default here) |
 | CUDA out-of-memory at startup | Lower `MAX_MODEL_LEN` to `65536`, or set `KV_CACHE_DTYPE=fp8`, or lower `GPU_MEMORY_UTILIZATION` to `0.90` |
 | OOM under load (not at startup) | Set `MAX_NUM_SEQS=32` to cap concurrency |
 | "unrecognized model" / architecture error | Base image too old — check `VLLM_VERSION` is ≥ `v0.19.0`, then `make restart` |

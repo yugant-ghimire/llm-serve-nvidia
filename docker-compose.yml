@@ -1,0 +1,35 @@
+services:
+  vllm:
+    build:
+      context: .
+      args:
+        VLLM_VERSION: ${VLLM_VERSION:-v0.19.1}
+    image: llm-serve-nvidia:${VLLM_VERSION:-v0.19.1}
+    container_name: vllm-server
+    env_file:
+      - config.env
+    ports:
+      - "${PORT:-8000}:${PORT:-8000}"
+    volumes:
+      # Persist downloaded model weights between restarts
+      - hf-cache:/root/.cache/huggingface
+    # Required for PyTorch/NCCL shared memory (tensor parallel, dataloaders)
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT:-all}
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:${PORT:-8000}/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      # First boot downloads ~28 GB of weights — allow plenty of time
+      start_period: 45m
+    restart: unless-stopped
+
+volumes:
+  hf-cache:

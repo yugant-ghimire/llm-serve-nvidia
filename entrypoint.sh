@@ -34,7 +34,7 @@ add_arg  --api-key                    "${API_KEY:-}"
 add_arg  --tensor-parallel-size       "${TENSOR_PARALLEL_SIZE:-}"
 add_arg  --pipeline-parallel-size     "${PIPELINE_PARALLEL_SIZE:-}"
 add_arg  --gpu-memory-utilization     "${GPU_MEMORY_UTILIZATION:-}"
-add_arg  --swap-space                 "${SWAP_SPACE:-}"
+# --swap-space was removed in vLLM >= 0.19 (V1 engine has no CPU swap)
 add_arg  --cpu-offload-gb             "${CPU_OFFLOAD_GB:-}"
 
 # Model / context

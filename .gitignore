@@ -1,2 +1,5 @@
 # Local model weights, if any
 models/
+
+# Secrets (SSH password, tokens) — never commit
+.env

@@ -31,29 +31,5 @@ services:
       start_period: 45m
     restart: unless-stopped
 
-  # Sends a 1-token request every 90s so the GPU never looks idle to the
-  # host's GPU-sharing shim (idle VRAM gets memswap-evicted and the engine
-  # wedges on restore). Remove on hosts without the shim.
-  keepalive:
-    image: curlimages/curl:8.11.1
-    container_name: vllm-keepalive
-    env_file:
-      - config.env
-    depends_on:
-      vllm:
-        condition: service_healthy
-    entrypoint: /bin/sh
-    command:
-      - -c
-      - |
-        while true; do
-          curl -s -m 60 "http://vllm:$${PORT:-8000}/v1/completions" \
-            -H "Content-Type: application/json" \
-            -d "{\"model\": \"$${MODEL}\", \"prompt\": \"Hi\", \"max_tokens\": 1}" \
-            -o /dev/null
-          sleep 90
-        done
-    restart: unless-stopped
-
 volumes:
   hf-cache:

@@ -2,7 +2,7 @@
 # --env-file makes compose read it for ${...} interpolation too (port, GPU count).
 COMPOSE = docker compose --env-file config.env
 
-.PHONY: up down build logs restart status test shell
+.PHONY: up down build logs restart status test shell bash
 
 up: ## Build (if needed) and start the server in the background
 	$(COMPOSE) up -d --build
@@ -24,6 +24,11 @@ status: ## Container + health status
 
 shell: ## Shell inside the running container
 	$(COMPOSE) exec vllm bash
+
+bash: ## Bash inside the container; falls back to a one-off debug container if it isn't running
+	@$(COMPOSE) exec vllm bash || \
+	  (echo "--- vllm-server not running; starting one-off debug container ---"; \
+	   $(COMPOSE) run --rm --entrypoint bash vllm)
 
 test: ## Smoke-test the OpenAI-compatible endpoint
 	@. ./config.env; \

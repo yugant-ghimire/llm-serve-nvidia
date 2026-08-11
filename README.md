@@ -7,12 +7,17 @@ Containerized LLM serving on NVIDIA GPUs using [vLLM](https://docs.vllm.ai)'s Op
 ## 1. One-time host setup
 
 - NVIDIA driver installed (`nvidia-smi` works)
-- Docker + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-- Sanity-check GPU passthrough:
+- Docker + Compose plugin — run `sudo bash docker-install.sh` (follows the
+  GPU provider's prescribed install path)
 
-  ```bash
-  docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
-  ```
+**Provider-specific:** this host's cloud platform injects GPU access and a
+GPU-sharing shim into every container automatically. Per their support
+guide, do **not** add `deploy.resources.reservations` GPU blocks,
+`runtime: nvidia`, or `CUDA_VISIBLE_DEVICES` to any container config —
+those conflict with the injection. This repo's compose file follows that
+rule. On a standard NVIDIA host (dedicated GPU, stock Docker + NVIDIA
+Container Toolkit), restore the reservation block noted in
+`docker-compose.yml`.
 
 ## 2. Run
 

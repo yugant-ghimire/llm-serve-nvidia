@@ -155,6 +155,34 @@ Measured after bring-up: first token in ~2 s, ~10–11 tokens/s decode
   normal NVIDIA host (no shim), the vLLM path should work as originally
   designed — re-enable CUDA graphs and 0.92 utilization there.
 
+## Gotcha: stale UVM memory makes restarts race
+
+After killing a shim-managed container, its **managed (UVM) allocations can
+linger for many minutes** and are reclaimed only gradually (~1 GB/min
+observed). Three views of the same empty-looking GPU, measured seconds apart:
+
+| View | Reading | Why |
+|---|---|---|
+| `nvidia-smi` memory.used | 0 MiB | doesn't count managed/UVM memory |
+| real `cuMemGetInfo` (passthrough) | 29.1 GiB free | ~15 GiB stale UVM still resident |
+| default shim view | 43.0 GiB "free" | shim hides it and would memswap-juggle |
+
+Consequence: restarting the server immediately after a kill starts it with
+20+ GiB less real VRAM than expected → weights load into the remainder →
+KV/Mamba pool allocation fails (`max_mamba_cache_size=-38`, negative rest
+memory) → crash → `--restart unless-stopped` retries into the same shrinking
+window, sometimes leaking more each lap.
+
+Fix: **wait for the drain before starting.** `make sglang-up` now probes real
+free VRAM (passthrough `cuMemGetInfo`) in a loop and only launches once
+≥39 GiB is actually free. If you launch by hand, run the probe first:
+
+```bash
+docker run --rm --network host -e HAISHARE_PASSTHROUGH=1 --entrypoint python3 \
+  lmsysorg/sglang:latest -c \
+  "import torch; f,t=torch.cuda.mem_get_info(); print(f/2**30, 'GiB free')"
+```
+
 ## Debugging toolkit that proved useful
 
 ```bash

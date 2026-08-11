@@ -35,9 +35,18 @@ bash: ## Bash inside the container; falls back to a one-off debug container if i
 # All settings live in sglang.env; see LEARNINGS.md for the story.
 # ---------------------------------------------------------------
 
-sglang-up: ## Start the sglang server (config: sglang.env)
+sglang-up: ## Start the sglang server (config: sglang.env); waits for stale VRAM to drain first
 	@set -a; . ./sglang.env; set +a; \
 	docker rm -f $$SGLANG_CONTAINER 2>/dev/null || true; \
+	echo "Waiting for real free VRAM >= 39 GiB (stale UVM drains ~1 GB/min; see LEARNINGS.md)..."; \
+	for i in $$(seq 1 40); do \
+	  free=$$(timeout 120 docker run --rm --network host -e HAISHARE_PASSTHROUGH=1 \
+	    --entrypoint python3 $$SGLANG_IMAGE \
+	    -c "import torch; f,t=torch.cuda.mem_get_info(); print(int(f/2**20))" 2>/dev/null | tail -1); \
+	  echo "  real free VRAM: $$free MiB"; \
+	  [ -n "$$free" ] && [ "$$free" -ge 39936 ] && break; \
+	  sleep 20; \
+	done; \
 	docker run -d --name $$SGLANG_CONTAINER \
 	  --network host --ipc=host \
 	  -v $$HF_CACHE_VOLUME:/root/.cache/huggingface \

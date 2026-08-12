@@ -15,13 +15,6 @@ services:
       - hf-cache:/root/.cache/huggingface
     # Required for PyTorch/NCCL shared memory (tensor parallel, dataloaders)
     ipc: host
-    # NOTE: intentionally NO GPU reservation block / runtime override here.
-    # The cloud provider's container runtime injects GPU access + their
-    # sharing shim into every container automatically, and their support
-    # guide says compose-level GPU requests conflict with that injection.
-    # On a standard NVIDIA host, restore:
-    #   deploy: {resources: {reservations: {devices:
-    #     [{driver: nvidia, count: all, capabilities: [gpu]}]}}}
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:${PORT:-8000}/health || exit 1"]
       interval: 30s

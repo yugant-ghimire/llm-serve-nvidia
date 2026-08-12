@@ -173,9 +173,9 @@ KV/Mamba pool allocation fails (`max_mamba_cache_size=-38`, negative rest
 memory) → crash → `--restart unless-stopped` retries into the same shrinking
 window, sometimes leaking more each lap.
 
-Fix: **wait for the drain before starting.** `make sglang-up` now probes real
-free VRAM (passthrough `cuMemGetInfo`) in a loop and only launches once
-≥39 GiB is actually free. If you launch by hand, run the probe first:
+Fix: **wait for the drain before starting.** Before launching (including via
+`make sglang-up`, which starts the container immediately), check real free
+VRAM with the probe below and wait until it's back near ~40 GiB:
 
 ```bash
 docker run --rm --network host -e HAISHARE_PASSTHROUGH=1 --entrypoint python3 \

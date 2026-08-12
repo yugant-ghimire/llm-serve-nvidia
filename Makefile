@@ -2,7 +2,7 @@
 # --env-file makes compose read it for ${...} interpolation too (port, GPU count).
 COMPOSE = docker compose --env-file config.env
 
-.PHONY: up down build logs restart status test shell bash sglang-up sglang-down sglang-logs sglang-test
+.PHONY: up down build logs restart status test shell bash sglang-up sglang-down sglang-logs
 
 up: ## Build (if needed) and start the server in the background
 	$(COMPOSE) up -d --build
@@ -35,18 +35,9 @@ bash: ## Bash inside the container; falls back to a one-off debug container if i
 # All settings live in sglang.env; see LEARNINGS.md for the story.
 # ---------------------------------------------------------------
 
-sglang-up: ## Start the sglang server (config: sglang.env); waits for stale VRAM to drain first
+sglang-up: ## Start the sglang server (config: sglang.env)
 	@set -a; . ./sglang.env; set +a; \
 	docker rm -f $$SGLANG_CONTAINER 2>/dev/null || true; \
-	echo "Waiting for real free VRAM >= 39 GiB (stale UVM drains ~1 GB/min; see LEARNINGS.md)..."; \
-	for i in $$(seq 1 40); do \
-	  free=$$(timeout 120 docker run --rm --network host -e HAISHARE_PASSTHROUGH=1 \
-	    --entrypoint python3 $$SGLANG_IMAGE \
-	    -c "import torch; f,t=torch.cuda.mem_get_info(); print(int(f/2**20))" 2>/dev/null | tail -1); \
-	  echo "  real free VRAM: $$free MiB"; \
-	  [ -n "$$free" ] && [ "$$free" -ge 39936 ] && break; \
-	  sleep 20; \
-	done; \
 	docker run -d --name $$SGLANG_CONTAINER \
 	  --network host --ipc=host \
 	  -v $$HF_CACHE_VOLUME:/root/.cache/huggingface \
@@ -75,15 +66,6 @@ sglang-down: ## Stop and remove the sglang server
 sglang-logs: ## Follow sglang logs (shim warnings filtered out)
 	@set -a; . ./sglang.env; set +a; \
 	docker logs -f --tail 50 $$SGLANG_CONTAINER 2>&1 | grep --line-buffered -vE "HAI-9473"
-
-sglang-test: ## Smoke-test the sglang OpenAI endpoint
-	@set -a; . ./sglang.env; set +a; \
-	echo "--- /v1/models ---"; \
-	curl -s -m 10 localhost:$$PORT/v1/models; echo; \
-	echo "--- /v1/chat/completions ---"; \
-	curl -s -m 120 localhost:$$PORT/v1/chat/completions \
-	  -H "Content-Type: application/json" \
-	  -d "{\"model\": \"$$MODEL\", \"messages\": [{\"role\": \"user\", \"content\": \"Say hello in one short sentence.\"}], \"max_tokens\": 400}"; echo
 
 test: ## Smoke-test the OpenAI-compatible endpoint
 	@. ./config.env; \

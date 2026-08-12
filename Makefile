@@ -2,7 +2,13 @@
 # --env-file makes compose read it for ${...} interpolation too (port, GPU count).
 COMPOSE = docker compose --env-file config.env
 
-.PHONY: up down build logs restart status test shell bash sglang-up sglang-down sglang-logs
+.DEFAULT_GOAL := help
+
+.PHONY: help up down build logs restart status test shell bash sglang-up sglang-down sglang-logs
+
+help: ## List available commands
+	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
+	  awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 up: ## Build (if needed) and start the server in the background
 	$(COMPOSE) up -d --build

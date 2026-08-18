@@ -1,28 +1,31 @@
 services:
-  vllm:
+  sglang:
     build:
       context: .
       args:
-        VLLM_VERSION: ${VLLM_VERSION:-v0.19.1-ubuntu2404}
-    image: llm-serve-nvidia:${VLLM_VERSION:-v0.19.1-ubuntu2404}
-    container_name: vllm-server
+        SGLANG_VERSION: ${SGLANG_VERSION:-latest-cu129-runtime}
+    image: llm-serve-nvidia:sglang-${SGLANG_VERSION:-latest-cu129-runtime}
+    container_name: sglang-server
     env_file:
       - config.env
-    ports:
-      - "${PORT:-8000}:${PORT:-8000}"
-    volumes:
-      # Persist downloaded model weights between restarts
-      - hf-cache:/root/.cache/huggingface
-    # Required for PyTorch/NCCL shared memory (tensor parallel, dataloaders)
+    # Host networking: the provider pod's docker bridge has broken DNS
+    # (model downloads fail), and this binds PORT directly.
+    network_mode: host
+    # Required for PyTorch shared memory
     ipc: host
+    shm_size: 32g
+    volumes:
+      # Model weights on the provider's big NFS share (not the root disk)
+      - ${HF_CACHE_DIR:-/data/share73/hf-cache}:/root/.cache/huggingface
+    # NOTE: intentionally NO GPU reservation block / runtime override.
+    # The cloud provider's container runtime injects GPU access + their
+    # sharing shim automatically; compose-level GPU requests conflict
+    # with that injection (their support guide + LEARNINGS.md).
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:${PORT:-8000}/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
-      # First boot downloads ~28 GB of weights — allow plenty of time
-      start_period: 45m
+      # First boot downloads weights + captures CUDA graphs
+      start_period: 30m
     restart: unless-stopped
-
-volumes:
-  hf-cache:

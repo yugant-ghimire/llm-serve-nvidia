@@ -3,3 +3,4 @@ models/
 
 # Secrets (SSH password, tokens) — never commit
 .env
+.webui_secret_key

@@ -1,8 +1,10 @@
 # llm-serve-nvidia
 
-Containerized LLM serving on NVIDIA GPUs using [vLLM](https://docs.vllm.ai)'s OpenAI-compatible server. All configuration lives in **`config.env`**.
+Containerized LLM serving on NVIDIA GPUs using [sglang](https://docs.sglang.io)'s OpenAI-compatible server. All configuration lives in **`config.env`**.
 
-**Current target: `Qwen/Qwen3.6-27B-FP8` on a single 48 GB L40S** — FP8 weights (~28 GB) + 128K context KV cache, thinking mode and tool calling enabled. `make up` is all it takes.
+**Current target: `RadixArk/Qwen3.8-27B-NVFP4` on a single 48 GB L40S** behind a cloud provider's GPU-sharing shim — NVFP4 weights (~15.5 GB), 128K context, MTP speculative decoding, decode CUDA graphs, thinking mode and tool calling enabled. Measured: **~70 tok/s per stream, ~366 tok/s aggregate at 5 concurrent users.** `make up` is all it takes.
+
+The full debugging history of this host (the shim, its failure modes, and every workaround baked into this repo) lives in [LEARNINGS.md](LEARNINGS.md) — read it before changing infra-level settings.
 
 ## 1. One-time host setup
 
@@ -10,31 +12,25 @@ Containerized LLM serving on NVIDIA GPUs using [vLLM](https://docs.vllm.ai)'s Op
 - Docker + Compose plugin — run `sudo bash docker-install.sh` (follows the
   GPU provider's prescribed install path)
 
-**Provider-specific:** this host's cloud platform injects GPU access and a
-GPU-sharing shim into every container automatically. Per their support
-guide, do **not** add `deploy.resources.reservations` GPU blocks,
-`runtime: nvidia`, or `CUDA_VISIBLE_DEVICES` to any container config —
-those conflict with the injection. This repo's compose file follows that
-rule. On a standard NVIDIA host (dedicated GPU, stock Docker + NVIDIA
-Container Toolkit), restore the reservation block noted in
-`docker-compose.yml`.
+**Provider-specific rules (this cloud):** the platform injects GPU access and
+a GPU-sharing shim into every container automatically. Do **not** add
+`deploy.resources` GPU blocks, `runtime: nvidia`, `--gpus`, or
+`CUDA_VISIBLE_DEVICES` anywhere — they conflict with the injection. This
+repo's compose file follows that rule. On a standard NVIDIA host, add a
+normal GPU reservation block to `docker-compose.yml` and drop the
+shim-related settings flagged in `config.env`.
 
 ## 2. Run
 
 ```bash
 git clone <this-repo> && cd llm-serve-nvidia
 make up
-```
-
-First boot pulls the vLLM image (~10 GB) and downloads ~28 GB of model weights, so expect 15–45 minutes depending on bandwidth. Weights persist in the `hf-cache` Docker volume — later restarts take only a few minutes (model load + CUDA graph capture).
-
-Watch startup:
-
-```bash
 make logs
 ```
 
-You'll see, in order: weight download → `Loading model weights` → KV-cache profiling (a line like `GPU KV cache size: ... tokens`) → CUDA graph capture → **`Application startup complete`**. The server is ready at that point.
+First boot pulls the sglang image and downloads weights to the NFS share
+(`HF_CACHE_DIR`), then captures decode CUDA graphs — allow 10–30 minutes.
+Ready when the log shows **`Uvicorn running on http://0.0.0.0:8000`**.
 
 ## 3. Test
 
@@ -48,71 +44,65 @@ Or manually:
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen/Qwen3.6-27B-FP8",
+    "model": "RadixArk/Qwen3.8-27B-NVFP4",
     "messages": [{"role": "user", "content": "What is the capital of Nepal?"}],
-    "max_tokens": 512
+    "max_tokens": 1000
   }'
 ```
 
-Qwen3.6 is a **thinking model**: with `REASONING_PARSER=qwen3` set (it is), the chain-of-thought arrives in the response's `reasoning_content` field and the final answer in `content`. Any OpenAI SDK works — set `base_url` to `http://<server>:8000/v1`. Tool calling is enabled (`qwen3_coder` parser, auto tool choice).
+This is a **thinking model**: chain-of-thought arrives in `reasoning_content`,
+the answer in `content`. Use generous `max_tokens` (1000+) — short caps get
+consumed by reasoning before any visible answer appears. Tool calling is
+enabled (`qwen3_coder` parser). Any OpenAI SDK works — set `base_url` to
+`http://<server>:8000/v1`.
 
 ## 4. Monitor
 
 | What | How |
 |---|---|
-| Container + health state | `make status` (healthcheck polls `/health` every 30 s) |
-| Live logs (requests, errors) | `make logs` |
+| Container + health state | `make status` |
+| Live logs (shim spam filtered) | `make logs` |
 | GPU utilization / VRAM | `watch -n1 nvidia-smi` on the host |
 | Health endpoint | `curl localhost:8000/health` → HTTP 200 when healthy |
-| Throughput, latency, queue depth, KV-cache usage | `curl localhost:8000/metrics` (Prometheus format) |
+| Stuck-or-working check | `docker exec sglang-server sh -c 'ps -eo pid,time,args \| grep sglang \| grep -v grep'` twice — TIME climbing = working |
 
-Useful `/metrics` series: `vllm:num_requests_running`, `vllm:num_requests_waiting`, `vllm:gpu_cache_usage_perc`, `vllm:time_to_first_token_seconds`. Point Prometheus/Grafana at `:8000/metrics` if you want dashboards.
-
-vLLM also prints a throughput line in the logs every few seconds (`Avg prompt throughput ... tokens/s, Running: N reqs`), which is the quickest way to eyeball load.
-
-The container restarts automatically (`unless-stopped`) if it crashes or the host reboots.
+If requests hang while `/health` still answers, the engine is wedged (see
+LEARNINGS.md); the watchdog aborts after `WATCHDOG_TIMEOUT` seconds and
+Docker restarts the container automatically.
 
 ## 5. Reconfigure
 
-Edit `config.env`, then:
-
-```bash
-make restart
-```
-
-Settings chosen for the L40S (all in `config.env`, annotated there):
+Edit `config.env`, then `make restart`. Key settings (all annotated in the file):
 
 | Setting | Value | Why |
 |---|---|---|
-| `MAX_MODEL_LEN` | `131072` | 128K context fits the ~15 GB KV budget left after weights; Qwen recommends ≥128K for thinking quality. Native max is 262144. |
-| `GPU_MEMORY_UTILIZATION` | `0.92` | ~44 GB for vLLM, ~2.5 GB headroom for CUDA context |
-| `QUANTIZATION` | empty | Checkpoint is pre-quantized FP8; vLLM auto-detects it |
-| `REASONING_PARSER` | `qwen3` | Separates `<think>` blocks into `reasoning_content` |
-| `TOOL_CALL_PARSER` | `qwen3_coder` | Qwen3.6's tool-call format, with auto tool choice on |
-| `VLLM_VERSION` | `v0.19.1` | Qwen3.6 requires vLLM ≥ 0.19.0 |
-
-Optional extra speed: enable multi-token prediction (speculative decoding) by uncommenting the `EXTRA_ARGS=--speculative-config ...` line in `config.env`.
+| `MEM_FRACTION_STATIC` | `0.88` | 0.90 starves CUDA graph capture; 0.85 wastes KV |
+| `CONTEXT_LENGTH` | `131072` | Cheap on this hybrid arch (~32 KB/token KV) |
+| `MAX_RUNNING_REQUESTS` | `8` | The cookbook's `1` serializes all users |
+| `CUDA_GRAPH_BACKEND_PREFILL` | `disabled` | Prefill capture crashes under the shim |
+| `SPEC_*` (MTP) | steps 5 / draft 6 | ~1.3–1.4× decode via speculative decoding |
+| `MM_FEATURE_TRANSPORT` | `cpu` | CUDA IPC crashes on the shim's managed memory |
 
 ## 6. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `could not select device driver "nvidia" with capabilities: [[gpu]]` | NVIDIA Container Toolkit missing on the host — install it, run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`, verify with the `nvidia-smi` passthrough check in section 1 |
-| `GLIBC_2.38 not found (required by ...libhaishare.so)` spam | The cloud host injects a GPU-sharing shim needing a newer glibc than Ubuntu 22.04 images have — use an `-ubuntu2404` `VLLM_VERSION` tag (already the default here) |
-| Crash during `Capturing CUDA graphs` with `cudaErrorStreamCaptureInvalidated` (often after a shim `cuCtxSynchronize failed (rc=900)` warning) | The host's GPU-sharing shim synchronizes the CUDA context mid-capture, killing graph capture — set `ENFORCE_EAGER=true` (already the default here) |
-| CUDA out-of-memory at startup | Lower `MAX_MODEL_LEN` to `65536`, or set `KV_CACHE_DTYPE=fp8`, or lower `GPU_MEMORY_UTILIZATION` to `0.90` |
-| OOM under load (not at startup) | Set `MAX_NUM_SEQS=32` to cap concurrency |
-| "unrecognized model" / architecture error | Base image too old — check `VLLM_VERSION` is ≥ `v0.19.0`, then `make restart` |
-| Slow first startup | Normal: image pull + 28 GB weight download. Watch progress in `make logs` |
-| Container unhealthy but logs look fine | Healthcheck allows 45 min for first boot; check `curl localhost:8000/health` |
-| Want raw `<think>` text in `content` instead | Clear `REASONING_PARSER` in `config.env` and `make restart` |
+| `GLIBC_2.38 not found (required by ...libhaishare.so)`, instant exit | Image too old for the provider's shim — keep a cu129+/Ubuntu-24.04-based `SGLANG_VERSION` |
+| Crash at `Capture ... CUDA graph begin` with `cudaErrorStreamCaptureInvalidated` | The shim broke graph capture — ensure `CUDA_GRAPH_BACKEND_PREFILL=disabled`; if decode capture also fails, the node is having a bad day: retry later and log the timestamp for the provider |
+| `cudaErrorUnknown` in a flashinfer path on first request | JIT kernel collision — verify the image build ran the `nvidia-cutlass-dsl` uninstall (rebuild with `make build`) |
+| `cudaErrorInvalidValue` creating `MmItemMemoryPool` | `MM_FEATURE_TRANSPORT=cpu` missing |
+| Boot sees far less free VRAM than expected (`Load weight begin. avail mem=...`) | Stale UVM from a killed container — wait 2–5 min and `make restart` (see LEARNINGS.md) |
+| Requests hang, `/health` fine, GPU 0%, `HAI-9473` warnings every 30 s | Provider's scheduler lock jammed — watchdog will self-heal; report timestamp to provider |
+| `Not enough GPU memory for hybrid ... state cache` | Lower `CONTEXT_LENGTH` or raise `MEM_FRACTION_STATIC` cautiously |
 
 ## Repo layout
 
 | File | Purpose |
 |---|---|
-| `config.env` | **All** model + runtime settings (committed; keep secrets out of it) |
-| `docker-compose.yml` | GPU wiring, ports, weight-cache volume, healthcheck |
-| `Dockerfile` | Thin layer over the official `vllm/vllm-openai` image |
-| `entrypoint.sh` | Turns `config.env` variables into `vllm serve` flags |
-| `Makefile` | `up` / `down` / `logs` / `restart` / `status` / `test` / `shell` |
+| `config.env` | **All** model + runtime settings (committed; keep secrets out) |
+| `docker-compose.yml` | Host networking, NFS weight cache, healthcheck — **no GPU overrides** |
+| `Dockerfile` | Thin layer over `lmsysorg/sglang` + shim workaround baked in |
+| `entrypoint.sh` | Turns `config.env` variables into `sglang.launch_server` flags |
+| `Makefile` | `up` / `down` / `logs` / `restart` / `status` / `test` / `shell` / `bash` |
+| `LEARNINGS.md` | Post-mortem of the GPU-sharing shim saga; read before infra changes |
+| `docker-install.sh` | Provider-prescribed Docker install |

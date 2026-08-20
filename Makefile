@@ -10,7 +10,7 @@ help: ## List available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
 	  awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-up: ## Build (if needed) and start the server in the background
+start: ## Build (if needed) and start the server in the background
 	$(COMPOSE) up -d --build
 
 down: ## Stop and remove the server
@@ -19,8 +19,8 @@ down: ## Stop and remove the server
 build: ## Rebuild the image
 	$(COMPOSE) build
 
-logs: ## Follow server logs (host-shim spam filtered out)
-	@$(COMPOSE) logs -f sglang 2>&1 | grep --line-buffered -vE "HAI-9473"
+logs: ## Follow server logs 
+	@$(COMPOSE) logs -f sglang 2>&1 
 
 restart: ## Restart (picks up config.env changes)
 	$(COMPOSE) up -d --build --force-recreate
